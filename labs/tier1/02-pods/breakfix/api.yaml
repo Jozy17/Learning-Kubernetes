@@ -1,0 +1,15 @@
+# Break/fix t1-02: the "api" pod. Copy this file to work/ and fix it there.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: api
+  namespace: lab-pods
+  labels:
+    app: api
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.29-alpine
+    command: ["nginx", "-g", "daemon off;", "-c", "/etc/nginx/conf.d/api.conf"]
+    ports:
+    - containerPort: 80

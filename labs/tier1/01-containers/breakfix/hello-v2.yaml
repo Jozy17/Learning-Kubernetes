@@ -1,0 +1,15 @@
+# Break/fix t1-01: a pod that wants version 2.0 of your image.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-v2
+  namespace: lab-containers
+  labels:
+    app: hello-web
+    version: v2
+spec:
+  containers:
+  - name: web
+    image: hello-web:2.0
+    ports:
+    - containerPort: 8080

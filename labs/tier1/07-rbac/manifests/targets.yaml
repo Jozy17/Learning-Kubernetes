@@ -1,0 +1,32 @@
+# Provided by setup: things to have (or not have) access to.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  namespace: lab-rbac
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: app}}
+  template:
+    metadata: {labels: {app: app}}
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.29-alpine
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: payment-api-key
+  namespace: lab-rbac
+type: Opaque
+stringData:
+  api-key: CHANGE_ME_placeholder_not_a_real_key
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: other-team-config
+  namespace: lab-rbac-other
+data:
+  owner: other-team

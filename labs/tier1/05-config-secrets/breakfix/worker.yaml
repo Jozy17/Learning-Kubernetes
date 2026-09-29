@@ -1,0 +1,20 @@
+# Break/fix t1-05: the "worker" pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: worker
+  namespace: lab-config
+spec:
+  containers:
+  - name: worker
+    image: busybox:1.37
+    command: ["sh", "-c", "echo log level is $LOG_LEVEL; sleep infinity"]
+    env:
+    - name: LOG_LEVEL
+      valueFrom:
+        configMapKeyRef:
+          name: worker-settings
+          key: LOG_LEVEL
+    resources:
+      requests: {cpu: 10m, memory: 16Mi}
+      limits: {memory: 32Mi}

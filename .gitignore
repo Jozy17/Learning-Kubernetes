@@ -1,0 +1,8 @@
+# Local progress + secrets never go to git
+.labctl/
+.env
+*.kubeconfig
+kubeconfig*
+# Scratch files labs create in your working copy
+labs/**/work/
+__pycache__/

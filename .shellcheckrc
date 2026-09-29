@@ -1,0 +1,3 @@
+# SC1091: sourced files are resolved at runtime
+# SC2015: we use `a && ok || warn` deliberately for status lines
+disable=SC1091,SC2015

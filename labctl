@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# labctl - drive the Learning-Kubernetes labs.
+# Run ./labctl help for usage. Everything it does is plain bash you can read:
+# lib/common.sh (helpers), lib/cluster.sh (cluster), labs/*/*/{setup,verify,breakfix,cleanup}.sh
+set -o errexit -o nounset -o pipefail
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/common.sh"
+PY="python3 $REPO_ROOT/lib/labctl_py.py"
+
+usage() {
+  cat <<EOF
+${C_BOLD}labctl${C_RESET} - Kubernetes -> KubeVirt -> Harvester study labs
+
+${C_BOLD}Setup${C_RESET}
+  doctor                 check your machine and tools (run this first)
+  install-tools          install pinned kind + kubectl into ~/.local/bin (checksum-verified)
+  cluster up|down|status create / delete / inspect the kind lab cluster
+
+${C_BOLD}Labs${C_RESET}
+  list                   list labs and your status
+  start <lab>            prepare a lab (e.g. ./labctl start t1-02), then follow its README
+  verify <lab>           check your work
+  breakfix <lab>         inject the troubleshooting scenario
+  breakfix <lab> --check check whether you fixed it
+  cleanup <lab>          remove everything the lab created
+  reset <lab>            cleanup + start again from scratch
+  readme <lab>           print the path to the lab README
+
+${C_BOLD}Study${C_RESET}
+  progress               show your progress
+  quiz [module] [--missed]   flashcards (no module = list quizzes)
+
+Labs use kubectl context '${KUBE_CONTEXT}' only; your other clusters are never touched.
+EOF
+}
+
+# ---------- lab lookup ----------
+# Each lab directory has a lab.env with LAB_ID, LAB_TITLE, LAB_NAMESPACE, ...
+lab_dirs() { find "$REPO_ROOT/labs" -mindepth 3 -maxdepth 3 -name lab.env -printf '%h\n' | sort; }
+
+lab_dir() {
+  local id="$1" d
+  for d in $(lab_dirs); do
+    if grep -qx "LAB_ID=$id" "$d/lab.env"; then echo "$d"; return 0; fi
+  done
+  die "unknown lab '$id'. See: ./labctl list"
+}
+
+lab_field() { (source "$1/lab.env"; echo "${!2}"); }
+
+labs_tsv() {
+  local d
+  for d in $(lab_dirs); do printf '%s\t%s\n' "$(lab_field "$d" LAB_ID)" "$(lab_field "$d" LAB_TITLE)"; done
+}
+
+run_lab_script() {
+  local dir="$1" script="$2"; shift 2
+  [[ -x "$dir/$script" ]] || die "$dir/$script missing or not executable"
+  "$dir/$script" "$@"
+}
+
+# ---------- commands ----------
+cmd_list() {
+  printf '%-7s %-10s %s\n' "LAB" "STATUS" "TITLE"
+  local id title
+  while IFS=$'\t' read -r id title; do
+    printf '%-7s %-10s %s\n' "$id" "$($PY status "$id")" "$title"
+  done < <(labs_tsv)
+  echo
+  echo "Status: - = not started, started, verified, done = verified + break/fix fixed"
+}
+
+cmd_start() {
+  local id="$1" dir; dir="$(lab_dir "$id")"
+  info "Starting lab $id: $(lab_field "$dir" LAB_TITLE)"
+  run_lab_script "$dir" setup.sh
+  $PY mark "$id" started
+  echo
+  info "Setup done. Now open the lab guide and work through the tasks:"
+  echo "    ${dir#"$REPO_ROOT"/}/README.md"
+  echo "  When finished: ./labctl verify $id"
+}
+
+cmd_verify() {
+  local id="$1" dir; dir="$(lab_dir "$id")"
+  info "Verifying lab $id"
+  if run_lab_script "$dir" verify.sh; then
+    $PY mark "$id" verified
+    echo; info "Next: try the troubleshooting scenario with ./labctl breakfix $id"
+  else
+    return 1
+  fi
+}
+
+cmd_breakfix() {
+  local id="$1" mode="${2:-}" dir; dir="$(lab_dir "$id")"
+  if [[ "$mode" == "--check" ]]; then
+    info "Checking break/fix for lab $id"
+    if run_lab_script "$dir" breakfix.sh check; then
+      $PY mark "$id" breakfix_fixed
+      echo; info "Fixed! Answer the review questions in the README, then: ./labctl quiz"
+    else
+      return 1
+    fi
+  else
+    info "Injecting break/fix scenario for lab $id"
+    run_lab_script "$dir" breakfix.sh inject
+    $PY mark "$id" breakfix_started
+  fi
+}
+
+cmd_cleanup() {
+  local id="$1" dir; dir="$(lab_dir "$id")"
+  info "Cleaning up lab $id"
+  run_lab_script "$dir" cleanup.sh
+}
+
+cmd_doctor() {
+  local fail=0
+  step "Operating system"
+  if grep -qi microsoft /proc/version 2>/dev/null; then ok "running inside WSL2"; else ok "$(uname -sr)"; fi
+
+  step "Docker" "kind runs every Kubernetes node as a Docker container"
+  if docker info >/dev/null 2>&1; then
+    ok "Docker $(docker version --format '{{.Server.Version}}') running, cgroup v$(docker info --format '{{.CgroupVersion}}')"
+  else
+    warn "Docker not reachable. WSL2: 'sudo systemctl start docker'; also make sure you are in the docker group (id -nG)"
+    fail=1
+  fi
+
+  step "Tools (pinned versions from versions.env)"
+  if command -v kind >/dev/null; then
+    local kv; kv="$(kind version | awk '{print $2}')"
+    [[ "$kv" == "$KIND_VERSION" ]] && ok "kind $kv" || warn "kind $kv (pinned: $KIND_VERSION) - run ./labctl install-tools"
+  else warn "kind missing - run ./labctl install-tools"; fail=1; fi
+  if command -v kubectl >/dev/null; then
+    local kc; kc="$(kubectl version --client -o json 2>/dev/null | python3 -c 'import json,sys;print(json.load(sys.stdin)["clientVersion"]["gitVersion"])')"
+    [[ "$kc" == "$KUBECTL_VERSION" ]] && ok "kubectl $kc" || warn "kubectl $kc (pinned: $KUBECTL_VERSION) - run ./labctl install-tools"
+  else warn "kubectl missing - run ./labctl install-tools"; fail=1; fi
+  command -v python3 >/dev/null && ok "python3 $(python3 -c 'import sys;print(sys.version.split()[0])')" || { warn "python3 missing"; fail=1; }
+  command -v git >/dev/null && ok "git" || warn "git missing (sudo apt install git)"
+
+  step "Resources" "3 kind nodes use roughly 2-3 GB RAM; Tier 2+ needs much more"
+  ok "CPUs: $(nproc), memory: $(free -g | awk '/Mem:/{print $2}') GB visible, disk free here: $(df -h "$REPO_ROOT" | awk 'NR==2{print $4}')"
+  local w i
+  w="$(sysctl -n fs.inotify.max_user_watches 2>/dev/null || echo 0)"
+  i="$(sysctl -n fs.inotify.max_user_instances 2>/dev/null || echo 0)"
+  if (( w >= 524288 && i >= 512 )); then ok "inotify limits ($w/$i)"; else
+    warn "inotify limits low ($w/$i); multi-node kind may show 'too many open files'. See docs/setup-windows-wsl2.md"
+  fi
+
+  step "Virtualization (needed from Tier 2 on)" "KubeVirt runs VMs with KVM; WSL2 exposes /dev/kvm when nested virtualization is on"
+  if [[ -e /dev/kvm ]]; then ok "/dev/kvm present"; else warn "/dev/kvm not present (fine for Tier 1)"; fi
+
+  step "Lab cluster"
+  if cluster_exists; then ok "cluster '$CLUSTER_NAME' exists"; else info "no lab cluster yet: ./labctl cluster up"; fi
+  echo
+  (( fail == 0 )) && ok "doctor: ready for Tier 1" || { warn "doctor: fix the items above first"; return 1; }
+}
+
+cmd_install_tools() {
+  local bin="$HOME/.local/bin" arch os
+  os="$(uname -s)"; arch="$(uname -m)"
+  [[ "$os" == Linux && "$arch" == x86_64 ]] || die "auto-install supports linux/amd64 only; install kind $KIND_VERSION and kubectl $KUBECTL_VERSION manually"
+  mkdir -p "$bin"
+  local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
+
+  step "Download kind $KIND_VERSION" "single static binary from the official GitHub release"
+  curl -fsSLo "$tmp/kind" "https://github.com/kubernetes-sigs/kind/releases/download/$KIND_VERSION/kind-linux-amd64"
+  step "Verify its SHA-256 checksum" "never run a downloaded binary you haven't verified (supply-chain hygiene)"
+  echo "$KIND_SHA256_LINUX_AMD64  $tmp/kind" | sha256sum -c --quiet - || die "kind checksum mismatch - not installing"
+  install -m 0755 "$tmp/kind" "$bin/kind"; ok "installed $bin/kind"
+
+  step "Download kubectl $KUBECTL_VERSION" "the Kubernetes CLI; official download from dl.k8s.io"
+  curl -fsSLo "$tmp/kubectl" "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl"
+  echo "$KUBECTL_SHA256_LINUX_AMD64  $tmp/kubectl" | sha256sum -c --quiet - || die "kubectl checksum mismatch - not installing"
+  install -m 0755 "$tmp/kubectl" "$bin/kubectl"; ok "installed $bin/kubectl"
+
+  case ":$PATH:" in *":$bin:"*) ;; *) warn "$bin is not on your PATH. Add to ~/.bashrc: export PATH=\"\$HOME/.local/bin:\$PATH\"";; esac
+}
+
+main() {
+  local cmd="${1:-help}"; shift || true
+  case "$cmd" in
+    help|-h|--help) usage ;;
+    doctor) cmd_doctor ;;
+    install-tools) cmd_install_tools ;;
+    cluster) "$REPO_ROOT/lib/cluster.sh" "${1:-status}" ;;
+    list) cmd_list ;;
+    start|verify|breakfix|cleanup|reset|readme)
+      [[ $# -ge 1 ]] || die "usage: labctl $cmd <lab-id>   (see ./labctl list)"
+      case "$cmd" in
+        start) cmd_start "$1" ;;
+        verify) cmd_verify "$1" ;;
+        breakfix) cmd_breakfix "$1" "${2:-}" ;;
+        cleanup) cmd_cleanup "$1" ;;
+        reset) cmd_cleanup "$1"; cmd_start "$1" ;;
+        readme) echo "$(lab_dir "$1")/README.md" ;;
+      esac ;;
+    progress) labs_tsv | $PY show ;;
+    quiz) $PY quiz "$@" ;;
+    *) usage; die "unknown command '$cmd'" ;;
+  esac
+}
+
+main "$@"

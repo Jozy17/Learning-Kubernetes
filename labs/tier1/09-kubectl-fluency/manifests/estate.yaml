@@ -1,0 +1,65 @@
+# Provided by setup: a small "estate" to search through. Don't read this file
+# before doing the tasks - finding things with kubectl IS the exercise.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: frontend, namespace: lab-kubectl, labels: {tier: frontend}}
+spec:
+  replicas: 3
+  selector: {matchLabels: {app: frontend}}
+  template:
+    metadata: {labels: {app: frontend, tier: frontend}}
+    spec:
+      containers: [{name: nginx, image: nginx:1.30-alpine, resources: {requests: {cpu: 10m, memory: 16Mi}}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: backend, namespace: lab-kubectl, labels: {tier: backend}}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: backend}}
+  template:
+    metadata: {labels: {app: backend, tier: backend}}
+    spec:
+      containers: [{name: nginx, image: nginx:1.30-alpine, resources: {requests: {cpu: 10m, memory: 16Mi}}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: cache, namespace: lab-kubectl, labels: {tier: cache}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: cache}}
+  template:
+    metadata: {labels: {app: cache, tier: cache}}
+    spec:
+      containers: [{name: nginx, image: nginx:1.30-alpine, resources: {requests: {cpu: 10m, memory: 16Mi}}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: reporting, namespace: lab-kubectl, labels: {tier: backend}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: reporting}}
+  template:
+    metadata: {labels: {app: reporting, tier: backend}}
+    spec:
+      containers: [{name: nginx, image: nginx:1.29-alpine, resources: {requests: {cpu: 10m, memory: 16Mi}}}]
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: nightly-export-7f3kq, namespace: lab-kubectl, labels: {tier: batch, job: nightly-export}}
+spec:
+  restartPolicy: Never
+  containers:
+  - name: export
+    image: busybox:1.37
+    command: ["sh", "-c", "echo 'connecting to db...'; echo 'ERROR: connection refused' >&2; exit 1"]
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: nightly-export-2m8zt, namespace: lab-kubectl, labels: {tier: batch, job: nightly-export}}
+spec:
+  restartPolicy: Never
+  containers:
+  - name: export
+    image: busybox:1.37
+    command: ["sh", "-c", "echo 'export complete'; exit 0"]
